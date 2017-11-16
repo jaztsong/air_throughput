@@ -25,7 +25,7 @@
 #define ADD_LEN 17
 #define BITMAP_LEN 64
 //
-#define MTU 1582
+#define MTU 1350
 
 /* The percentile parameter to compute transmission rate */
 #define X_PERCENTILE_5 0.5
@@ -56,6 +56,7 @@ class Analyzer
                 //All in millisecond
                 std::string mName;
                 double mAirtime;
+                uint16_t mLoss;
                 uint16_t mWindow;
                 bool clean_Packets();
                 std::deque<Line_cont*> mPackets;

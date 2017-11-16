@@ -7,6 +7,7 @@ Analyzer::Analyzer(uint16_t w)
 {
         mWindow = w;
         mAirtime = 0.0;
+        mLoss = 0.0;
         mPackets.clear();
         mBlkACKs.clear();
         init_zmq();
@@ -121,9 +122,11 @@ void Analyzer::do_analyze()
                 return;
         }
         mAirtime = 0.0;
+        mLoss = 0.0;
         for(auto blk_stat:mBlkACKs){
                 blk_stat.second->calc_stats();
                 mAirtime += blk_stat.second->getAirTime_flow();
+                mLoss += blk_stat.second->getLoss_flow();
                 /* Report at the directional flow level */
                 /* blk_stat.second->report_flow(); */
         }
@@ -147,14 +150,17 @@ float Analyzer::estimate_throughput()
                         my_airtime = blk_stat.second->getAirTime_flow();
                         my_loss = blk_stat.second->getLoss_flow();
                         my_AMPDU_num = blk_stat.second->getN_MPDU_flow();
-                        break;
+                }else if(blk_stat.first.substr(0,17) == my_addr){
+                        my_airtime += blk_stat.second->getAirTime_flow();
+                        
                 }
         }
         if(my_airtime > 0){
                 my_rate = (my_AMPDU_num - my_loss)*MTU*8/(1000*my_airtime);
-                throughput = my_rate*(0.95 - (mAirtime - my_airtime)/mWindow);
+                throughput = my_rate*my_airtime/mAirtime;
+                throughput *= 0.83/( mAirtime/mWindow );
         }
-        return my_rate;
+        return throughput;
 }
 void Analyzer::clean_mem()
 {
@@ -182,12 +188,11 @@ void Analyzer::report()
 
 void Analyzer::dump_report()
 {
-        printf("%-5s %10.6f Airtime:%6.3f my_Air_Throughput:%6.2f\n",
-                        "CHAN", //level
+        printf("%10.6f Artm:%5.2f Air_Thrpt:%4.1f Loss:%d\n",
                         getTime(), //time
                         mAirtime,  //Airtime
-                        estimate_throughput()
-              );
+                        estimate_throughput(),
+                        mLoss);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -351,9 +356,6 @@ bool BlkACK_stat::parse_AMPDU()
 
         /* The variable name mBAMPDU means AMPDU based on BlkACK. */
         mAMPDU_tuple.push_back(make_tuple(t_len,t_len_miss,mACKs.back()->RSSI,time_delta,if_continue));
-        /* Compensate the window border loss */
-        if(mAMPDU_tuple.size() == 1)
-                mAMPDU_tuple.push_back(make_tuple(t_len,t_len_miss,mACKs.back()->RSSI,time_delta,if_continue));
 
         /* report_pkt(); */
 

@@ -67,7 +67,8 @@ class Airtime_Meas : public WifipcapCallbacks
                         line_buffer<<std::fixed<<std::setprecision(6)<<time<<"|"<<delta_time<<"|"<<len<<"|"<<ether2MAC(ptr+10)<<"|"<<ether2MAC(ptr+4)<<"|"<<type_subtype<<"|"<<FC_TO_DS(fc)<<"|0|"<<mRSSI<<"|"<<mFREQ<<"|"<<mRate<< "|"<<EXTRACT_LE_16BITS(ptr+2)<<"|"<<( type_subtype != 25 ? "":std::to_string(  16*( *( ptr+19  )  ) + ( ( *(ptr+18)  )>>4  )  )  )<<"|"<<( type_subtype == 25?bitmap:"")  ;
                         /* printf("%s\n",line_buffer.str().c_str()); */
                         mAnalyzer->addPacket(line_buffer.str());
-                        pre_time = time;
+                        if(FC_TYPE(fc) != 2)
+                                pre_time = time;
                 }
 
 };
