@@ -1,0 +1,26 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 10.00
+# Visual Studio 2008
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "wifipcap", "wifipcap.vcproj", "{A661687E-9828-4EF2-AF35-A37908BD7BA2}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "sample", "sample.vcproj", "{A88062B4-235E-432A-83AF-27DCE8265CB8}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A661687E-9828-4EF2-AF35-A37908BD7BA2}.Debug|Win32.ActiveCfg = Debug|Win32
+		{A661687E-9828-4EF2-AF35-A37908BD7BA2}.Debug|Win32.Build.0 = Debug|Win32
+		{A661687E-9828-4EF2-AF35-A37908BD7BA2}.Release|Win32.ActiveCfg = Release|Win32
+		{A661687E-9828-4EF2-AF35-A37908BD7BA2}.Release|Win32.Build.0 = Release|Win32
+		{A88062B4-235E-432A-83AF-27DCE8265CB8}.Debug|Win32.ActiveCfg = Debug|Win32
+		{A88062B4-235E-432A-83AF-27DCE8265CB8}.Debug|Win32.Build.0 = Debug|Win32
+		{A88062B4-235E-432A-83AF-27DCE8265CB8}.Release|Win32.ActiveCfg = Release|Win32
+		{A88062B4-235E-432A-83AF-27DCE8265CB8}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
