@@ -1668,7 +1668,7 @@ print_radiotap_field(struct cpack_state *s, u_int32_t bit, int *pad, radiotap_hd
 		rc = cpack_uint16(s, &u.u16);
 		if (rc != 0)
 			break;
-		//rc = cpack_uint16(s, &u2.u16);
+		rc = cpack_uint16(s, &u2.u16);
 		break;
 	case IEEE80211_RADIOTAP_FHSS:
 	case IEEE80211_RADIOTAP_LOCK_QUALITY:
@@ -1729,7 +1729,7 @@ print_radiotap_field(struct cpack_state *s, u_int32_t bit, int *pad, radiotap_hd
 	switch (bit) {
 	case IEEE80211_RADIOTAP_CHANNEL:
 	    /* printf("%u MHz ", u.u16); */
-	    if (u2.u16 != 0)
+	    //if (u2.u16 != 0)
 		//printf("(0x%04x) ", u2.u16);
 		hdr->has_channel = true;
 		hdr->channel = u.u16;

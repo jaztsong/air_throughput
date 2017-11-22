@@ -40,7 +40,7 @@ class Airtime_Meas : public WifipcapCallbacks
 
                 /* } */
                 void HandleRadiotap(const struct timeval& t, radiotap_hdr *hdr, const u_char *rest, int len) {
-                        /* std::cout<<"radiotap channel "<<hdr->channel<<std::endl; */
+                        /* std::cout<<"radiotap channel "<<hdr->signal_dbm<<std::endl; */
                         mRSSI = hdr->signal_dbm;
                         mRate = hdr->rate;
                         mFREQ = hdr->channel;

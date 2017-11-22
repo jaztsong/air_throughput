@@ -131,7 +131,7 @@ void Analyzer::do_analyze()
                 /* blk_stat.second->report_flow(); */
         }
         report();
-        dump_report();
+        /* dump_report(); */
         clean_mem();
 }
 float Analyzer::estimate_throughput()
@@ -145,21 +145,41 @@ float Analyzer::estimate_throughput()
         double my_airtime = 0.0;
         float throughput = 0;
         float my_rate = 0.0;
+        map<string,tuple<float,uint16_t,uint16_t>> client_stats;
         for(auto blk_stat:mBlkACKs){
                 if (blk_stat.first.substr(0,17) == my_addr){
                         my_airtime = blk_stat.second->getAirTime_flow();
                         my_loss = blk_stat.second->getLoss_flow();
                         my_AMPDU_num = blk_stat.second->getN_MPDU_flow();
-                }else if(blk_stat.first.substr(0,17) == my_addr){
+                        /* throughput = 1000*blk_stat.second->getGap_mean_flow(); */
+                }else if(blk_stat.first.substr(17,17) == my_addr){
                         my_airtime += blk_stat.second->getAirTime_flow();
                         
+                }else{
+                        string c_string = "";
+                        string alt_string = blk_stat.first.substr(17,17) + blk_stat.first.substr(0,17);
+                        if(client_stats.find(blk_stat.first) != client_stats.end())
+                                c_string = blk_stat.first;
+                        else if(client_stats.find(alt_string) != client_stats.end())
+                                c_string = alt_string;
+
+                        if(c_string.length() > 0)
+                                client_stats[c_string] = make_tuple(get<0>( client_stats[c_string] ) + blk_stat.second->getAirTime_flow(),get<1>( client_stats[c_string] ) + blk_stat.second->getN_MPDU_flow(),get<1>( client_stats[c_string]) + blk_stat.second->getLoss_flow());
+                        else
+                                client_stats[blk_stat.first] = make_tuple(blk_stat.second->getAirTime_flow(),blk_stat.second->getN_MPDU_flow(),blk_stat.second->getLoss_flow());
+
                 }
         }
-        if(my_airtime > 0){
-                my_rate = (my_AMPDU_num - my_loss)*MTU*8/(1000*my_airtime);
-                throughput = my_rate*my_airtime/mAirtime;
-                throughput *= 0.83/( mAirtime/mWindow );
+        for(auto c:client_stats){
+                if(get<0>(c.second) > 0)
+                        printf("%s airtime %5.3f rate %4.2f\n",c.first.c_str(),get<0>(c.second)/mWindow,( get<1>(c.second) - 0*get<2>(c.second) )*MTU*8/(1000*get<0>(c.second)));
         }
+        if(my_airtime > 0 && my_AMPDU_num > 0){
+                my_rate = (my_AMPDU_num - my_loss)*MTU*8/(1000*my_airtime );
+                throughput = my_rate*( my_airtime )/mAirtime;
+                printf("My flow airtime %5.3f total %5.3f rate %4.2f\n",my_airtime/mWindow,mAirtime/mWindow,my_rate);
+        }
+        printf("\n");
         return throughput;
 }
 void Analyzer::clean_mem()
@@ -188,11 +208,10 @@ void Analyzer::report()
 
 void Analyzer::dump_report()
 {
-        printf("%10.6f Artm:%5.2f Air_Thrpt:%4.1f Loss:%d\n",
+        printf("%10.6f Artm:%5.2f Air_Thrpt:%4.1f\n",
                         getTime(), //time
                         mAirtime,  //Airtime
-                        estimate_throughput(),
-                        mLoss);
+                        estimate_throughput());
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -357,7 +376,7 @@ bool BlkACK_stat::parse_AMPDU()
         /* The variable name mBAMPDU means AMPDU based on BlkACK. */
         mAMPDU_tuple.push_back(make_tuple(t_len,t_len_miss,mACKs.back()->RSSI,time_delta,if_continue));
 
-        /* report_pkt(); */
+        report_pkt();
 
         return true;
 
@@ -393,7 +412,7 @@ void BlkACK_stat::calc_stats()
                 if(n > 0){
                         mAMPDU_mean = sum/float(n);
                         mRSSI_mean =(int) RSSI_sum/float(n);
-                        mTime_delta = sum_time_delat/float(n);
+                        mTime_delta = sum_time_delat/float(sum);
                 }
                 mMPDU_num = sum;
                 /* Deal with loss */
@@ -418,7 +437,7 @@ void BlkACK_stat::calc_rate()
 {
         if(mTime_delta > 0.001 && mMPDU_num > 10){
                 /* mAMPDU_max = min((int)max((float)mAMPDU_max,MAX_TRANS_TIME/mTime_delta_median),BITMAP_LEN); */
-                mRate =  MTU*8*mAMPDU_mean/float(mTime_delta*1000);
+                mRate =  MTU*8/float(mTime_delta*1000);
         }
         else
                 mRate = 0;
