@@ -1,16 +1,35 @@
 #include "analyzer.h"
 #include <iostream>
+#include <cmath>
 
 using namespace std;
-Analyzer::Analyzer(uint16_t w)
+void calc_mean_std(vector<float> v, float* mean, float* std)
+{
+        float mean_ = 0.0;
+        float std_ = 0.0;
+        for (auto v_ : v){
+            mean_ += v_;
+        }
+        mean_ = mean_/v.size();
+        for (auto v_ : v){
+           std_ += pow(v_-mean_,2);
+        }
+        *mean = mean_;
+        *std = sqrt(std_/v.size());
+}
+Analyzer::Analyzer(uint16_t w, uint16_t c)
         : mZMQ_context(1)
 {
         mWindow = w;
         mAirtime = 0.0;
+        mChunk_Window = c;
+        mScale = 1.0;
         mLoss = 0.0;
         mPackets.clear();
+        mChunks.clear();
         mBlkACKs.clear();
         init_zmq();
+        srand(time(NULL));
 }
 void Analyzer::stop_report()
 {
@@ -81,29 +100,48 @@ bool Analyzer::clean_Packets()
         return true;
 
 }
-
-bool Analyzer::populate_BlkACK()
+bool Analyzer::make_chunks()
 {
         std::lock_guard<std::mutex> guard(mPackets_mutex);
-        for(auto it = mPackets.begin(); it != mPackets.end();++it){
+        vector<Line_cont*> temp_pkts;
+        double st_time = mPackets.front()->getTime();
+        for(auto it:mPackets){
+                if(it->getTime() > st_time + (double) mChunk_Window/1000.0){
+                        mChunks.push_back(temp_pkts);
+                        temp_pkts.clear();
+                        st_time += (double) mChunk_Window/1000.0;
+                }
+                temp_pkts.push_back(it);
+        }
+        if(temp_pkts.size() > 0)
+                mChunks.push_back(temp_pkts);
+        if(mChunks.size() > 0){
+                return true;
+        }
+        else{
+                return false;
+        }
+
+}
+
+map<std::string,BlkACK_stat*> Analyzer::populate_BlkACK(vector<Line_cont*> tPackets)
+{
+        map<std::string,BlkACK_stat*> tBlkACKs;
+        for(auto it = tPackets.begin(); it != tPackets.end();++it){
                 //Populate BlkACK stats
                 if(is_blockACK(*it)){
                         BlkACK* t_b =  new BlkACK(*it);
-                        if(mBlkACKs.find(t_b->addr) == mBlkACKs.end()){
+                        if(tBlkACKs.find(t_b->addr) == tBlkACKs.end()){
                                         BlkACK_stat* t_blkack_stat = new BlkACK_stat(t_b->addr);
-                                        mBlkACKs[t_b->addr]=t_blkack_stat;
+                                        tBlkACKs[t_b->addr]=t_blkack_stat;
                         }
-                        mBlkACKs[t_b->addr]->addACK(t_b);
-                        mBlkACKs[t_b->addr]->parse_AMPDU();
+                        tBlkACKs[t_b->addr]->addACK(t_b);
+                        tBlkACKs[t_b->addr]->parse_AMPDU();
 
                 }
 
         }
-        if(mBlkACKs.size() > 0)
-                return true;
-        else{
-                return false;
-        }
+        return tBlkACKs;
 }
 bool Analyzer::is_blockACK(Line_cont* l)
 {
@@ -113,74 +151,148 @@ bool Analyzer::is_blockACK(Line_cont* l)
                 return false;
 
 }
+
 void Analyzer::do_analyze()
 {
+        vector<float> t_res;
         if(clean_Packets() == false){
-                return;
+                goto output;
         }
-        if(populate_BlkACK() == false){
-                return;
+        if(make_chunks() == false){
+                goto output;
         }
         mAirtime = 0.0;
         mLoss = 0.0;
-        for(auto blk_stat:mBlkACKs){
-                blk_stat.second->calc_stats();
-                mAirtime += blk_stat.second->getAirTime_flow();
-                mLoss += blk_stat.second->getLoss_flow();
-                /* Report at the directional flow level */
-                /* blk_stat.second->report_flow(); */
+        mRate_switch_guide = 0.0;
+        for(auto ck:mChunks){
+               float re[2];
+               estimate_throughput(populate_BlkACK(ck),re);
+               if(re[0] > -1)
+                       t_res.push_back(re[0]);
         }
+        if(t_res.size() == 0){
+                goto output;
+        }
+        calc_mean_std(t_res,&mThroughput_mean,&mThroughput_std);
+output:
         report();
-        /* dump_report(); */
+        dump_report();
         clean_mem();
 }
-float Analyzer::estimate_throughput()
+void Analyzer::estimate_throughput(map<std::string,BlkACK_stat*> BlkACKs,float* res)
 {
         //TODO: This is a crude way to compute air throughput for video streaming purpose,
         //we may come back and make it more elegent to maybe detect/input adapter mac_addr as an input
         //For Lixing Wed 15 Nov 2017 09:39:42 AM EST.
-        string my_addr = "e4:a4:71:f5:1c:84";
+        string my_addr = "80:1f:02:f5:b1:de";
+        uint16_t my_MPDU_num = 0;
         uint16_t my_AMPDU_num = 0;
+        float my_AMPDU_mean = 0;
+        float my_AMPDU_gap = 0;
         uint16_t my_loss = 0;
         double my_airtime = 0.0;
         float throughput = 0;
         float my_rate = 0.0;
-        map<string,tuple<float,uint16_t,uint16_t>> client_stats;
-        for(auto blk_stat:mBlkACKs){
+        float all_airtime = 0.0;
+        float c_Scale = 1.0;
+        map<string,tuple<float,float,uint16_t,float,float>> client_stats; //airtime,AMPDU_mean,Loss,AMPDU_gap,AMPDU_N
+        for(auto blk_stat:BlkACKs){
+                blk_stat.second->calc_stats();
+                mAirtime += blk_stat.second->getAirTime_flow();
+                all_airtime += blk_stat.second->getAirTime_flow();
+                mLoss += blk_stat.second->getLoss_flow();
                 if (blk_stat.first.substr(0,17) == my_addr){
-                        my_airtime = blk_stat.second->getAirTime_flow();
+                        my_airtime += blk_stat.second->getAirTime_flow();
                         my_loss = blk_stat.second->getLoss_flow();
-                        my_AMPDU_num = blk_stat.second->getN_MPDU_flow();
+                        my_MPDU_num = blk_stat.second->getN_MPDU_flow();
+                        my_AMPDU_mean = blk_stat.second->getAMPDU_mean_flow();
+                        my_AMPDU_gap = blk_stat.second->getGap_mean_flow()*blk_stat.second->getAMPDU_mean_flow(); 
+                        my_AMPDU_num = blk_stat.second->getN_MPDU_flow()/blk_stat.second->getAMPDU_mean_flow();
                         /* throughput = 1000*blk_stat.second->getGap_mean_flow(); */
                 }else if(blk_stat.first.substr(17,17) == my_addr){
                         my_airtime += blk_stat.second->getAirTime_flow();
-                        
-                }else{
-                        string c_string = "";
-                        string alt_string = blk_stat.first.substr(17,17) + blk_stat.first.substr(0,17);
-                        if(client_stats.find(blk_stat.first) != client_stats.end())
-                                c_string = blk_stat.first;
-                        else if(client_stats.find(alt_string) != client_stats.end())
-                                c_string = alt_string;
+                }
+                client_stats[blk_stat.first] = make_tuple(
+                                blk_stat.second->getAirTime_flow(),
+                                blk_stat.second->getAMPDU_mean_flow(),
+                                blk_stat.second->getAMPDU_max_flow(),
+                                blk_stat.second->getGap_mean_flow()*blk_stat.second->getAMPDU_mean_flow(),
+                                blk_stat.second->getN_MPDU_flow()/blk_stat.second->getAMPDU_mean_flow()
+                                );
 
-                        if(c_string.length() > 0)
-                                client_stats[c_string] = make_tuple(get<0>( client_stats[c_string] ) + blk_stat.second->getAirTime_flow(),get<1>( client_stats[c_string] ) + blk_stat.second->getN_MPDU_flow(),get<1>( client_stats[c_string]) + blk_stat.second->getLoss_flow());
-                        else
-                                client_stats[blk_stat.first] = make_tuple(blk_stat.second->getAirTime_flow(),blk_stat.second->getN_MPDU_flow(),blk_stat.second->getLoss_flow());
-
+        }
+        if(all_airtime/mChunk_Window>0.8)
+                c_Scale = mChunk_Window/all_airtime;
+        float tGap_sum = 0.0;
+        for(auto c:client_stats){
+                if(get<2>(c.second) > 0)
+                        printf("%s airtime %5.3f AMPDU %3.1f Gap %3.1f N %d\n",
+                                        c.first.c_str(),
+                                        c_Scale*get<0>(c.second)/mChunk_Window,
+                                        get<1>(c.second),
+                                        get<3>(c.second),
+                                        (uint16_t)get<4>(c.second)
+                                        /* (get<1>(c.second) - 0*get<2>(c.second))*MTU*8/(1000*mAirtime*mScale) */
+                              );
+                tGap_sum += get<3>(c.second);
+        }
+        uint16_t light_link = 0, total_link = 0;
+        mRate_switch_guide = 0.0;
+        float give_up_factor = 1.5;
+        for(auto c:client_stats){
+                /* printf("compare AMPDU_Gap %5.3f>%5.3f?%d AMPDU_N %d>%d?%d\n", */
+                /*                 get<3>(c.second),my_AMPDU_gap,get<3>(c.second) > my_AMPDU_gap, */
+                /*                 (uint16_t)get<4>(c.second),my_AMPDU_num,(uint16_t)get<4>(c.second) > my_AMPDU_num); */
+                if(( get<3>(c.second) > give_up_factor*my_AMPDU_gap ) && ( (uint16_t) get<4>(c.second) > give_up_factor*my_AMPDU_num )){
+                        mRate_switch_guide = 1.0; //don't use this bitrate for going up;
+                        break;
+                }
+                else if(get<3>(c.second) > 1.0){
+                        if(( get<3>(c.second) <= my_AMPDU_gap ) || ( (uint16_t)get<4>(c.second) <= my_AMPDU_num ))   
+                                light_link++;
+                        total_link++;
+                        printf("lsong2: haha %d/%d\n",light_link,total_link);
                 }
         }
-        for(auto c:client_stats){
-                if(get<0>(c.second) > 0)
-                        printf("%s airtime %5.3f rate %4.2f\n",c.first.c_str(),get<0>(c.second)/mWindow,( get<1>(c.second) - 0*get<2>(c.second) )*MTU*8/(1000*get<0>(c.second)));
+        if( total_link > 1 && mRate_switch_guide == 0.0){
+                light_link--;
+                total_link--;
+                if(light_link == total_link)
+                        mRate_switch_guide = 2.0; //don't use this bitrate for going down;
         }
-        if(my_airtime > 0 && my_AMPDU_num > 0){
-                my_rate = (my_AMPDU_num - my_loss)*MTU*8/(1000*my_airtime );
-                throughput = my_rate*( my_airtime )/mAirtime;
-                printf("My flow airtime %5.3f total %5.3f rate %4.2f\n",my_airtime/mWindow,mAirtime/mWindow,my_rate);
+
+        float E_AMPDU_num = all_airtime*c_Scale/tGap_sum;
+        float E_throughput = 0;
+        
+        if(my_airtime > 0 && my_MPDU_num > 0){
+                my_rate = (my_MPDU_num - 0*my_loss )*MTU*8/(1000*my_airtime);
+                throughput = my_rate*( my_airtime )/( all_airtime*c_Scale );
+                E_throughput = throughput*(E_AMPDU_num/my_AMPDU_num);
+                /* E_throughput = throughput < E_throughput ? throughput + throughput*(E_AMPDU_num/my_AMPDU_num - 1)*my_airtime/all_airtime : E_throughput; */
+                printf("My flow airtime %5.3f total %5.3f AMPDU %3.1f N %d(%5.2f) c_TH %4.2f e_TH %4.2f\n",
+                                c_Scale*my_airtime/mChunk_Window,
+                                all_airtime/mChunk_Window,
+                                my_AMPDU_gap,
+                                my_AMPDU_num,
+                                E_AMPDU_num,
+                                throughput,
+                                E_throughput
+                      );
         }
+        /* if(all_airtime > 0){ */
+        /*         uint32_t poll =  rand() %  (uint32_t) all_airtime*1000; */
+        /*         if(  poll  < (uint32_t) my_airtime*1000 ) */
+        /*                 printf("poll==================================================================\t"),throughput = E_throughput; */
+        /*         printf("poll %d out of %d | %d\n",poll,(uint32_t) all_airtime*1000,(uint32_t)my_airtime*1000); */
+        /* } */
         printf("\n");
-        return throughput;
+        /* throughput = throughput + throughput*(E_AMPDU_num/my_AMPDU_num - 1)*my_airtime/mAirtime; */
+        /* return E_throughput; */
+        if (all_airtime > 0.5 || my_airtime > 0)
+                *res = throughput;
+        else
+                *res = -2;
+        *( res+1 ) = all_airtime;
 }
 void Analyzer::clean_mem()
 {
@@ -189,6 +301,7 @@ void Analyzer::clean_mem()
                 delete it.second;
         }
         mBlkACKs.clear();
+        mChunks.clear();
 }
 double Analyzer::getTime()
 {
@@ -202,16 +315,19 @@ void Analyzer::report()
 {
         zmq::message_t message(20);
         snprintf ((char *) message.data(), 20 ,
-                        "%f", estimate_throughput());
+                        "%f %f", mThroughput_mean,mRate_switch_guide);
         mZMQ_publisher->send(message);
 }
 
 void Analyzer::dump_report()
 {
-        printf("%10.6f Artm:%5.2f Air_Thrpt:%4.1f\n",
+        printf("%10.6f Airtime:%5.2f Air_Thrpt:%4.1f STD: %4.1f Rate_switch_guide %2.1f\n",
                         getTime(), //time
                         mAirtime,  //Airtime
-                        estimate_throughput());
+                        mThroughput_mean,
+                        mThroughput_std,
+                        mRate_switch_guide
+                        );
 }
 
 ////////////////////////////////////////////////////////////////////////////////////
@@ -376,7 +492,7 @@ bool BlkACK_stat::parse_AMPDU()
         /* The variable name mBAMPDU means AMPDU based on BlkACK. */
         mAMPDU_tuple.push_back(make_tuple(t_len,t_len_miss,mACKs.back()->RSSI,time_delta,if_continue));
 
-        report_pkt();
+        /* report_pkt(); */
 
         return true;
 
@@ -400,11 +516,13 @@ void BlkACK_stat::calc_stats()
 {
         int sum = 0, n = 0, RSSI_sum = 0, loss_sum = 0 ;
         float sum_time_delat = 0.0;
+        mAMPDU_max = 0;
         if(mAMPDU_tuple.size()>0){
                 for(vector<tuple<uint16_t,uint16_t,int,float,bool> >::iterator it = mAMPDU_tuple.begin();it!=mAMPDU_tuple.end();++it){
                         sum += get<0>(*it);
                         loss_sum += get<1>(*it);
                         RSSI_sum += get<2>(*it);
+                        mAMPDU_max = max(mAMPDU_max,get<0>(*it));
                         if( get<0>(*it) > 0 ) sum_time_delat += get<3>(*it)*get<0>(*it);
                         n++;
                         
@@ -456,6 +574,10 @@ float BlkACK_stat::getAMPDU_mean()
         return mAMPDU_mean;
 }
 
+uint16_t BlkACK_stat::getAMPDU_max_flow()
+{
+        return mAMPDU_max;
+}
 
 uint16_t BlkACK_stat::getN_MPDU_flow()
 {

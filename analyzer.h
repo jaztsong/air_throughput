@@ -36,7 +36,7 @@ class BlkACK_stat;
 class Analyzer
 {
         public:
-                Analyzer(uint16_t);
+                Analyzer(uint16_t,uint16_t);
                 /* virtual ~Analyzer (); */
                 uint16_t getWindowSize();
                 double getTime();
@@ -56,17 +56,24 @@ class Analyzer
                 //All in millisecond
                 std::string mName;
                 double mAirtime;
+                float mThroughput_mean;
+                float mThroughput_std;
+                float mRate_switch_guide;
                 uint16_t mLoss;
+                float mScale;
                 uint16_t mWindow;
+                uint16_t mChunk_Window;
                 bool clean_Packets();
                 std::deque<Line_cont*> mPackets;
+                std::vector<std::vector<Line_cont*>> mChunks;
                 std::map<std::string,BlkACK_stat*> mBlkACKs;
-                bool populate_BlkACK();
+                std::map<std::string,BlkACK_stat*> populate_BlkACK(std::vector<Line_cont*>);
+                bool make_chunks();
                 void do_analyze();
                 void clean_mem();
                 void report();
                 void dump_report();
-                float estimate_throughput();
+                void estimate_throughput(std::map<std::string,BlkACK_stat*>, float*);
                 bool is_blockACK(Line_cont*);
                 /* std::queue<Line_cont*> m_queue_blockACKreq; */
                 /* data */
@@ -145,6 +152,7 @@ class BlkACK_stat
                 float getRate_flow();
                 int getRSSI_flow();
                 float getAMPDU_mean_flow();
+                uint16_t getAMPDU_max_flow();
                 void report_pkt();
                 void clean_mem_flow();
 
@@ -158,6 +166,7 @@ class BlkACK_stat
                 float mAirtime;
                 int mRSSI_mean;
                 float mAMPDU_mean;
+                uint16_t mAMPDU_max;
                 float mLoss;
                 float mRate;
                 float mTime_delta;
